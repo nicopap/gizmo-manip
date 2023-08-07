@@ -1,6 +1,7 @@
 use std::f32::consts::TAU;
 
-use bevy::{input::mouse::MouseMotion, prelude::*};
+use bevy::ecs as bevy_ecs;
+use bevy::{input::mouse::MouseMotion, prelude::*, window::PrimaryWindow};
 
 fn main() {
     App::new()
@@ -10,29 +11,28 @@ fn main() {
             brightness: 0.5,
             color: Color::WHITE,
         })
-        .add_startup_system(setup)
-        .add_system(input_handling)
-        .add_system(update_canvas_size)
-        .add_system(normalize_gizmo_rot)
+        .add_systems(Startup, setup)
+        .add_systems(
+            Update,
+            (input_handling, update_canvas_size, normalize_gizmo_rot),
+        )
         .run();
 }
 
-fn update_canvas_size(mut windows: ResMut<Windows>) {
-    let window_updated = windows.is_changed();
+fn update_canvas_size(mut windows: Query<&mut Window, Changed<Window>>) {
     #[cfg(not(target_arch = "wasm32"))]
     let update_window = || {};
     #[cfg(target_arch = "wasm32")]
     let mut update_window = || {
         let browser_window = web_sys::window()?;
-        let window_width = browser_window.inner_width().ok()?.as_f64()?;
-        let window_height = browser_window.inner_height().ok()?.as_f64()?;
-        let window = windows.get_primary_mut()?;
-        window.set_resolution(window_width as f32, window_height as f32);
+        let width = browser_window.inner_width().ok()?.as_f64()?;
+        let height = browser_window.inner_height().ok()?.as_f64()?;
+        for mut window in &mut windows {
+            window.resolution.set(width as f32, height as f32);
+        }
         Some(())
     };
-    if window_updated {
-        update_window();
-    }
+    update_window();
 }
 
 #[derive(Component, PartialEq, Eq)]
@@ -43,7 +43,7 @@ enum Gizmo {
 
 fn normalize_gizmo_rot(time: Res<Time>, mut gizmos: Query<&mut Transform, With<Gizmo>>) {
     let dt = time.delta_seconds_f64();
-    let current = time.seconds_since_startup();
+    let current = time.elapsed_seconds_f64();
     if current % 1.0 < dt {
         for mut trans in gizmos.iter_mut() {
             trans.rotation = trans.rotation.normalize();
@@ -56,19 +56,14 @@ fn input_handling(
     mut mouse_motion: EventReader<MouseMotion>,
     mouse_buttons: Res<Input<MouseButton>>,
     mut gizmos: Query<(&mut Transform, &Gizmo)>,
-    windows: Res<Windows>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     use Gizmo::Right;
 
     if !mouse_buttons.pressed(MouseButton::Left) {
         return;
     }
-
-    let window = if let Some(w) = windows.get_primary() {
-        w
-    } else {
-        return;
-    };
+    let Ok(window) = windows.get_single() else { return; };
     for motion in mouse_motion.iter() {
         let window_width = window.physical_width();
         let cursor_pos = if let Some(w) = window.physical_cursor_position() {
@@ -76,7 +71,7 @@ fn input_handling(
         } else {
             return;
         };
-        let is_left = cursor_pos.x < window_width as f64 / 2.0;
+        let is_left = cursor_pos.x < window_width as f32 / 2.0;
         let rot = motion.delta * ROT_SPEED;
         for (mut gizmo_transform, gizmo) in gizmos.iter_mut() {
             if is_left ^ (*gizmo == Right) {
@@ -102,7 +97,7 @@ fn setup(
         ..default()
     };
     let handle = meshes.add(shape::Box::new(5.5, 0.5, 0.5).into());
-    let sphere = meshes.add(shape::Icosphere::default().into());
+    let sphere = meshes.add(shape::Icosphere::default().try_into().unwrap());
     let green = materials.add(mk_material(Color::rgb_u8(0x66, 0xcc, 0x33)));
     let red = materials.add(mk_material(Color::rgb_u8(0xff, 0x33, 0x00)));
     let blue = materials.add(mk_material(Color::rgb_u8(0x00, 0x66, 0xcc)));
@@ -126,30 +121,30 @@ fn setup(
         mk_pbr(&handle, &grey, transform)
     };
     let gizmo = |parent: &mut ChildBuilder, left_handed| {
-        parent.spawn_bundle(mk_handle(Vec3::X * 2.5, Quat::default()));
-        parent.spawn_bundle(mk_ball(&red, Vec3::X * 5.0));
+        parent.spawn(mk_handle(Vec3::X * 2.5, Quat::default()));
+        parent.spawn(mk_ball(&red, Vec3::X * 5.0));
 
-        parent.spawn_bundle(mk_handle(Vec3::Y * 2.5, Quat::from_rotation_z(TAU / 4.0)));
-        parent.spawn_bundle(mk_ball(&green, Vec3::Y * 5.0));
+        parent.spawn(mk_handle(Vec3::Y * 2.5, Quat::from_rotation_z(TAU / 4.0)));
+        parent.spawn(mk_ball(&green, Vec3::Y * 5.0));
 
         let z_dir = if left_handed { -1.0 } else { 1.0 };
         let z_vec = Vec3::Z * 2.5 * z_dir;
-        parent.spawn_bundle(mk_handle(z_vec, Quat::from_rotation_y(TAU / 4.0 * z_dir)));
-        parent.spawn_bundle(mk_ball(&blue, z_vec * 2.0));
+        parent.spawn(mk_handle(z_vec, Quat::from_rotation_y(TAU / 4.0 * z_dir)));
+        parent.spawn(mk_ball(&blue, z_vec * 2.0));
     };
 
     // GIZMOS
-    let gizmo_pos = |x_pos| TransformBundle {
-        local: Transform::from_xyz(x_pos, 0.0, 0.0),
+    let gizmo_pos = |x_pos| SpatialBundle {
+        transform: Transform::from_xyz(x_pos, 0.0, 0.0),
         ..default()
     };
 
     commands
-        .spawn_bundle(gizmo_pos(-6.5))
+        .spawn(gizmo_pos(-6.5))
         .insert(Gizmo::Left)
         .with_children(|p| gizmo(p, true));
     commands
-        .spawn_bundle(gizmo_pos(6.5))
+        .spawn(gizmo_pos(6.5))
         .insert(Gizmo::Right)
         .with_children(|p| gizmo(p, false));
 
@@ -162,11 +157,11 @@ fn setup(
         transform: Transform::from_xyz(0.0, 8.0, z_pos),
         ..default()
     };
-    commands.spawn_bundle(light(10.0));
-    commands.spawn_bundle(light(-10.0));
+    commands.spawn(light(10.0));
+    commands.spawn(light(-10.0));
 
     // camera
-    commands.spawn_bundle(PerspectiveCameraBundle {
+    commands.spawn(Camera3dBundle {
         transform: Transform::from_xyz(0.0, 5.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
