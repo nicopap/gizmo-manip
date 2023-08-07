@@ -38,20 +38,13 @@ if [ ! -e .git ]; then
   exit 1
 fi
 
-#
 # Extract project name from Cargo.toml
-#
-
 ProjName="$(cargo metadata --no-deps --format-version 1 |
         sed -n 's/.*"name":"\([^"]*\)".*/\1/p')"
 
 #
 # Build
 #
-
-if [ ! -e target ] ; then
-    mkdir target
-fi
 
 RUSTFLAGS='--cfg=web_sys_unstable_apis' cargo build $ReleaseFlags --target wasm32-unknown-unknown 
 
@@ -101,8 +94,8 @@ for _ in $OutDir/*.js; do
 done
 
 if [ $Count -ne 1 ]; then
-  echo "Script is broken, must be 1 JS file matching mask"
+  echo "Script is broken, wasm-bindgen didn't generate a *.js file"
   exit 1
 fi
 
-mv $OutDir/*.js "$OutDir/main.js"
+mv $OutDir/*.js "$OutDir/bevy.js"
